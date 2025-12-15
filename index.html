@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Synapse - Collaborative Mind Map</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+        }
+    </script>
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Lucide Icons -->
+    <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
+
+    <!-- html2canvas for Screenshots -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; overflow: hidden; user-select: none; }
+        .bg-grid { background-size: 24px 24px; background-image: radial-gradient(circle, #e5e7eb 1.5px, transparent 1.5px); }
+        .dark .bg-grid { background-image: radial-gradient(circle, #374151 1.5px, transparent 1.5px); }
+        
+        .node { transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); touch-action: none; will-change: transform, box-shadow; }
+        .node.selected { @apply ring-2 ring-blue-500 ring-offset-2 ring-offset-gray-50 dark:ring-offset-gray-900; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5), 0 20px 25px -5px rgba(0, 0, 0, 0.1); transform: translateY(-2px); z-index: 50; }
+        .node.connecting-source { @apply ring-2 ring-green-500 ring-offset-2 ring-offset-gray-50 dark:ring-offset-gray-900; transform: scale(1.02); }
+
+        svg { overflow: visible; }
+        path { fill: none; stroke: #9ca3af; stroke-width: 2px; transition: stroke 0.3s; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.05)); }
+        .dark path { stroke: #6b7280; } 
+        path.selected { stroke: #3b82f6 !important; stroke-width: 4px; filter: drop-shadow(0 2px 4px rgba(59, 130, 246, 0.3)); }
+        path.temp-line { stroke: #3b82f6; stroke-width: 2px; stroke-dasharray: 6, 6; animation: dash 1s linear infinite; }
+        @keyframes dash { to { stroke-dashoffset: -12; } }
+
+        .avatar-group { display: flex; align-items: center; margin-right: 12px; }
+        .avatar { width: 32px; height: 32px; border-radius: 50%; border: 2px solid white; margin-left: -8px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: white; text-transform: uppercase; position: relative; box-shadow: 0 2px 5px rgba(0,0,0,0.15); transition: transform 0.2s; }
+        .avatar:hover { transform: translateY(-2px); z-index: 10; }
+        .dark .avatar { border-color: #1f2937; } 
+        .avatar:first-child { margin-left: 0; }
+        
+        .modal-overlay { background-color: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); }
+        .project-item:hover { background-color: #f3f4f6; }
+        .dark .project-item:hover { background-color: #374151; }
+        .project-item.active { background-color: #eff6ff; border-color: #3b82f6; }
+        .dark .project-item.active { background-color: #1e3a8a; border-color: #3b82f6; }
+        .cursor-crosshair { cursor: crosshair !important; }
+        .toggle-checkbox:checked { right: 0; border-color: #3b82f6; }
+        .toggle-checkbox:checked + .toggle-label { background-color: #3b82f6; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .dark ::-webkit-scrollbar-thumb { background: #4b5563; }
+    </style>
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 h-screen w-screen relative overflow-hidden transition-colors duration-200 selection:bg-blue-200 dark:selection:bg-blue-900">
+
+    <!-- Linking Mode Indicator (Bottom Right) -->
+    <div id="linking-mode-indicator" class="absolute bottom-6 right-6 z-40 hidden pointer-events-none">
+        <div class="bg-white/90 dark:bg-gray-800/90 backdrop-blur-md border border-blue-200 dark:border-blue-900/50 text-blue-700 dark:text-blue-300 px-3 py-2 rounded-lg shadow-lg flex items-center gap-2 text-xs font-medium">
+            <span class="relative flex h-2 w-2">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+            </span>
+            <span>Link Mode On</span>
+            <span class="text-gray-400 dark:text-gray-500 border-l border-gray-300 dark:border-gray-600 pl-2 ml-1">ESC to exit</span>
+        </div>
+    </div>
+
+    <div id="canvas-container" class="absolute inset-0 w-full h-full bg-grid overflow-hidden cursor-grab active:cursor-grabbing">
+        <svg id="edges-layer" class="absolute inset-0 w-full h-full pointer-events-none z-0"></svg>
+        <div id="nodes-layer" class="absolute inset-0 w-full h-full z-10"></div>
+    </div>
+
+    <input type="file" id="hidden-file-input" accept="image/png, image/jpeg, image/gif" class="hidden">
+
+    <div class="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-white/90 dark:bg-gray-800/90 backdrop-blur-md dark:border-gray-700 rounded-2xl shadow-2xl border border-white/20 px-4 py-3 flex items-center gap-3 z-50 transition-all duration-200 hover:scale-[1.02]">
+        
+        <button id="btn-add" class="p-2.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl tooltip-trigger transition-colors" title="Add Text Node (Double Click)">
+            <i data-lucide="plus-square" class="w-5 h-5 text-gray-700 dark:text-gray-200"></i>
+        </button>
+        <button id="btn-image" class="p-2.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl tooltip-trigger transition-colors" title="Upload Image (Max 500KB)">
+            <i data-lucide="image" class="w-5 h-5 text-gray-700 dark:text-gray-200"></i>
+        </button>
+
+        <div class="w-px h-8 bg-gray-200 dark:bg-gray-700"></div>
+
+        <button id="btn-link" class="p-2.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors relative" title="Connect Nodes">
+            <i data-lucide="link" class="w-5 h-5 text-gray-700 dark:text-gray-200"></i>
+            <div id="link-active-dot" class="absolute top-2 right-2 w-2 h-2 bg-green-500 rounded-full hidden ring-2 ring-white dark:ring-gray-800"></div>
+        </button>
+
+        <button id="btn-unlink" class="p-2.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-colors hidden text-red-500 dark:text-red-400" title="Remove Connection">
+            <i data-lucide="link-2-off" class="w-5 h-5"></i>
+        </button>
+
+        <button id="btn-delete" class="p-2.5 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-xl opacity-50 cursor-not-allowed transition-opacity group" title="Delete Selected">
+            <i data-lucide="trash-2" class="w-5 h-5 text-red-500 dark:text-red-400 group-hover:scale-110 transition-transform"></i>
+        </button>
+
+        <div class="w-px h-8 bg-gray-200 dark:bg-gray-700"></div>
+
+        <button id="btn-screenshot" class="p-2.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors" title="Take Screenshot">
+            <i data-lucide="camera" class="w-5 h-5 text-gray-700 dark:text-gray-200"></i>
+        </button>
+        
+        <div class="flex items-center gap-2 text-xs font-medium text-gray-500 dark:text-gray-400 border-l border-gray-200 dark:border-gray-700 pl-4">
+            <div id="status-indicator" class="w-2 h-2 rounded-full bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.5)]"></div>
+            <span id="status-text" class="hidden sm:inline">Connecting...</span>
+        </div>
+    </div>
+
+    <div class="absolute top-6 left-6 right-6 z-50 pointer-events-none select-none flex justify-between items-start">
+        <div class="pointer-events-auto flex items-center gap-4">
+            <button id="btn-projects" class="group relative bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 text-white p-3 rounded-2xl shadow-lg shadow-indigo-500/30 dark:shadow-indigo-500/50 hover:shadow-indigo-500/50 dark:hover:shadow-purple-500/90 transform hover:-translate-y-0.5 hover:scale-105 transition-all duration-300 border border-white/20 dark:border-white/30" title="Switch Project">
+                <div class="absolute inset-0 rounded-2xl bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                <i data-lucide="folder-open" class="w-6 h-6 relative z-10"></i>
+            </button>
+            <div>
+                <h1 class="text-2xl font-bold text-gray-800 dark:text-white tracking-tight flex items-center gap-2 drop-shadow-sm">
+                    <i data-lucide="network" class="w-7 h-7 text-blue-600 dark:text-blue-400"></i>
+                    Synapse
+                </h1>
+                <p id="current-project-name" class="text-xs font-semibold text-blue-600 dark:text-blue-300 mt-1 bg-blue-50 dark:bg-blue-900/40 px-3 py-1 rounded-full inline-block border border-blue-100 dark:border-blue-800">Default Project</p>
+            </div>
+        </div>
+        <div class="pointer-events-auto flex items-center gap-3">
+            <div id="participants-list" class="avatar-group"></div>
+            <button id="btn-invite" class="group relative bg-gradient-to-br from-blue-500 to-cyan-500 text-white px-5 py-2.5 rounded-xl shadow-lg shadow-blue-500/30 dark:shadow-cyan-500/50 hover:shadow-blue-500/50 dark:hover:shadow-cyan-400/90 transform hover:-translate-y-0.5 hover:scale-105 transition-all duration-300 border border-white/20 dark:border-white/30 flex items-center gap-2">
+                <div class="absolute inset-0 rounded-xl bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                <i data-lucide="shield-check" class="w-4 h-4 relative z-10"></i>
+                <span class="hidden sm:inline text-sm font-bold tracking-wide relative z-10">Invite</span>
+            </button>
+            <button id="btn-user-menu" class="bg-white dark:bg-gray-800 border-2 border-white dark:border-gray-700 hover:border-gray-200 dark:hover:border-gray-600 p-1 rounded-full shadow-lg transition-all hover:scale-105">
+                <div class="w-9 h-9 rounded-full bg-gradient-to-tr from-blue-600 to-purple-600 flex items-center justify-center text-white font-bold text-sm shadow-inner">ME</div>
+            </button>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="token-modal" class="fixed inset-0 z-[110] hidden bg-gray-900/90 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl w-full max-w-md p-8 transform transition-all text-center border border-white/10">
+            <div class="mx-auto w-20 h-20 bg-red-50 dark:bg-red-900/20 rounded-full flex items-center justify-center mb-6 ring-8 ring-red-50/50 dark:ring-red-900/10"><i data-lucide="lock" class="w-10 h-10 text-red-500 dark:text-red-400"></i></div>
+            <h3 class="text-2xl font-bold text-gray-800 dark:text-white mb-2">Private Project</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-8 leading-relaxed">This workspace is protected. Please enter the 6-character Access Token.</p>
+            <div class="mb-6"><input id="token-input" type="text" placeholder="• • • • • •" class="w-full text-center text-3xl tracking-[0.5em] font-mono uppercase bg-gray-50 dark:bg-gray-900/50 border-2 border-gray-200 dark:border-gray-700 rounded-2xl px-4 py-4 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 dark:text-white" maxlength="6"></div>
+            <button id="btn-verify-token" class="w-full bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white py-3.5 rounded-xl font-bold shadow-lg shadow-blue-500/30 transition-all">Verify & Join</button>
+            <p id="token-error" class="text-red-500 text-sm mt-4 hidden font-medium">Invalid Token</p>
+            <button id="btn-cancel-token" class="mt-6 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xs font-medium uppercase hover:underline">Back to Default Project</button>
+        </div>
+    </div>
+
+    <div id="user-modal" class="fixed inset-0 z-[100] hidden modal-overlay flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl w-full max-w-sm p-6 transform transition-all border border-gray-100 dark:border-gray-700">
+            <div class="flex justify-between items-center mb-6"><h3 class="text-lg font-bold text-gray-800 dark:text-white">Profile</h3><button id="btn-close-user" class="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"><i data-lucide="x" class="w-5 h-5 text-gray-500"></i></button></div>
+            <div class="flex flex-col items-center mb-8">
+                <div class="w-20 h-20 rounded-full bg-gradient-to-tr from-blue-600 to-purple-600 flex items-center justify-center text-white font-bold text-3xl shadow-lg ring-4 ring-white dark:ring-gray-700 mb-3">ME</div>
+                <div class="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold tracking-wider">Session ID</div>
+                <div id="user-id-display" class="text-sm font-mono text-gray-800 dark:text-gray-200 mt-1 bg-gray-100 dark:bg-gray-700 px-3 py-1 rounded-full">...</div>
+            </div>
+            <div class="space-y-3">
+                <div class="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700/30 rounded-2xl border border-gray-100 dark:border-gray-700">
+                    <span class="text-sm font-semibold text-gray-700 dark:text-gray-200">Dark Mode</span>
+                    <button id="btn-theme-toggle" class="relative inline-flex h-7 w-12 items-center rounded-full bg-gray-200 dark:bg-blue-600"><span id="theme-toggle-dot" class="inline-block h-5 w-5 transform rounded-full bg-white shadow transition translate-x-1 dark:translate-x-6"></span></button>
+                </div>
+                <button id="btn-sign-out" class="w-full flex items-center justify-center gap-2 p-3.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-2xl text-sm font-bold"><i data-lucide="log-out" class="w-4 h-4"></i>End Session</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="invite-modal" class="fixed inset-0 z-[100] hidden modal-overlay flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl w-full max-w-md p-6 border border-gray-100 dark:border-gray-700">
+            <div class="flex justify-between items-center mb-6"><h3 class="text-lg font-bold text-gray-800 dark:text-white">Project Access</h3><button id="btn-close-invite" class="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"><i data-lucide="x" class="w-5 h-5 text-gray-500"></i></button></div>
+            <div class="space-y-6">
+                <div>
+                    <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide ml-1">Direct Link</label>
+                    <div class="flex items-center gap-2 bg-gray-50 dark:bg-gray-900/50 p-2 rounded-xl border border-gray-200 dark:border-gray-600 mt-2"><input id="invite-link" readonly class="bg-transparent w-full text-sm text-gray-600 dark:text-gray-300 outline-none px-2" value="Loading..."><button id="btn-copy-link" class="bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-white text-xs font-bold px-3 py-2 rounded-lg">Copy</button></div>
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide ml-1">Access Token</label>
+                    <div class="flex items-center gap-2 bg-gray-50 dark:bg-gray-900/50 p-2 rounded-xl border border-gray-200 dark:border-gray-600 mt-2"><input id="display-token" readonly class="bg-transparent w-full text-xl font-mono tracking-widest text-gray-800 dark:text-white outline-none px-2 font-bold" value="LOADING"><button id="btn-copy-token" class="bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-white text-xs font-bold px-3 py-2 rounded-lg">Copy</button></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="project-modal" class="fixed inset-0 z-[100] hidden modal-overlay flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl w-full max-w-lg p-6 flex flex-col max-h-[80vh] border border-gray-100 dark:border-gray-700">
+            <div class="flex justify-between items-center mb-6"><h3 class="text-xl font-bold text-gray-800 dark:text-white flex items-center gap-2"><i data-lucide="folder" class="w-5 h-5"></i>My Projects</h3><button id="btn-close-projects" class="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"><i data-lucide="x" class="w-5 h-5 text-gray-500"></i></button></div>
+            <div class="flex gap-2 mb-6"><input id="new-project-name" type="text" placeholder="New Project Name..." class="flex-1 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 dark:text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"><button id="btn-create-project" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-xl font-bold text-sm">Create</button></div>
+            <div class="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-3 px-1">Recent Projects</div>
+            <div id="project-list" class="flex-1 overflow-y-auto space-y-2 pr-2"></div>
+        </div>
+    </div>
+
+    <div id="toast" class="absolute top-6 right-6 bg-white dark:bg-gray-800 p-4 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 max-w-xs z-50 transition-opacity duration-500 opacity-0 pointer-events-none" style="top: 100px;">
+        <div class="flex justify-between items-start mb-2"><h3 class="font-bold text-gray-800 dark:text-white flex items-center gap-2"><i data-lucide="link-2" class="w-4 h-4 text-blue-500"></i>Connect Mode</h3><button onclick="document.getElementById('toast').style.opacity = '0'" class="text-gray-400 hover:text-gray-600"><i data-lucide="x" class="w-4 h-4"></i></button></div>
+        <p class="text-sm text-gray-600 dark:text-gray-300">Select a <strong>Source Node</strong>, then select a <strong>Target Node</strong> to create a link.</p>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, getDoc, deleteDoc, onSnapshot, serverTimestamp, updateDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Configuration ---
+        // 1. For running here in the preview:
+        let firebaseConfig;
+        let appId = 'default-app-id';
+        
+        // Use injected config OR fallback
+        if (typeof __firebase_config !== 'undefined') {
+            firebaseConfig = JSON.parse(__firebase_config);
+            // SANITIZATION FIX HERE:
+            if (typeof __app_id !== 'undefined' && __app_id) {
+                appId = __app_id.replace(/[^a-zA-Z0-9_-]/g, '_'); // Sanitize path separators to fix 6-segment error
+            } else {
+                appId = 'default-app-id';
+            }
+        } else {
+            // 2. For running on your own computer (Standalone):
+            // REPLACE THIS OBJECT with your own from Step 2
+    	const firebaseConfig = {
+  apiKey: "AIzaSyDej8-tw_okEQmvRH1LINLGNvePg2bBYfk",
+  authDomain: "synapse-live.firebaseapp.com",
+  projectId: "synapse-live",
+  storageBucket: "synapse-live.firebasestorage.app",
+  messagingSenderId: "145967071794",
+  appId: "1:145967071794:web:d113226cb004505fce722b",
+  measurementId: "G-8ZQ29H58W5"
+};
+        }
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // --- State ---
+        let currentUser = { uid: 'guest-' + Math.floor(Math.random() * 10000) };
+        let rawNodes = {}; let rawEdges = {}; 
+        let currentProjectId = 'default';
+        let currentProjectName = 'Default Project';
+        let currentProjectToken = 'PUBLIC';
+        let nodes = {}; let edges = {}; 
+        let selectedNodeIds = new Set();
+        let isDragging = false;
+        let dragNodeId = null;
+        let dragOffset = { x: 0, y: 0 };
+        let isConnecting = false;
+        let connectionSourceId = null;
+        const HAS_SEEN_LINK_HELP = 'synapse_link_help_seen_v2';
+
+        // --- DOM Elements ---
+        const nodesLayer = document.getElementById('nodes-layer');
+        const edgesLayer = document.getElementById('edges-layer');
+        const canvasContainer = document.getElementById('canvas-container');
+        const statusInd = document.getElementById('status-indicator');
+        const statusText = document.getElementById('status-text');
+        const linkingIndicator = document.getElementById('linking-mode-indicator');
+        const btnUnlink = document.getElementById('btn-unlink');
+        
+        const myColor = `hsl(${Math.floor(Math.random() * 360)}, 70%, 50%)`;
+        const urlParams = new URLSearchParams(window.location.search);
+        let urlProjectId = urlParams.get('project');
+        
+        async function initAuth() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                console.warn("Auth failed, running in Offline/Guest mode:", err);
+                statusText.innerText = "Offline Mode";
+                statusInd.className = "w-2 h-2 rounded-full bg-gray-400";
+            }
+        }
+        
+        // Try to auth, but don't block app start
+        if (firebaseConfig && firebaseConfig.apiKey !== "API_KEY_HERE") {
+            initAuth();
+        }
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user; 
+                statusText.innerText = "Synced";
+                statusInd.className = "w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]";
+                document.getElementById('user-id-display').innerText = user.uid;
+                
+                if(urlProjectId && urlProjectId !== 'default') {
+                    checkAccessAndLoad(urlProjectId);
+                } else {
+                    loadProject('default', 'Default Project', 'PUBLIC');
+                }
+                
+                subscribeToProjects();
+                startPresence(user);
+            } else {
+                statusText.innerText = "Offline";
+                statusInd.className = "w-2 h-2 rounded-full bg-gray-400";
+            }
+        });
+
+        // --- Application Logic ---
+        
+        async function checkAccessAndLoad(projectId) {
+            try {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'synapse_projects', projectId);
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    if (data.createdBy === currentUser.uid || (data.allowedUsers && data.allowedUsers.includes(currentUser.uid))) {
+                        loadProject(projectId, data.name, data.accessCode);
+                    } else {
+                        showTokenModal(projectId, data.name, data.accessCode);
+                    }
+                } else {
+                    loadProject('default', 'Default Project', 'PUBLIC');
+                }
+            } catch(e) {
+                console.warn("Project load check failed:", e);
+                loadProject('default', 'Default Project', 'PUBLIC');
+            }
+        }
+
+        let pendingProjectId = null;
+        let pendingRealToken = null;
+        
+        function showTokenModal(projectId, name, realToken) {
+            pendingProjectId = projectId;
+            pendingRealToken = realToken;
+            document.getElementById('token-modal').classList.remove('hidden');
+        }
+
+        document.getElementById('btn-verify-token').addEventListener('click', async () => {
+            const input = document.getElementById('token-input');
+            if (input.value.trim().toUpperCase() === pendingRealToken) {
+                document.getElementById('token-modal').classList.add('hidden');
+                const pRef = doc(db, 'artifacts', appId, 'public', 'data', 'synapse_projects', pendingProjectId);
+                try {
+                    const snap = await getDoc(pRef);
+                    const currentAllowed = snap.data().allowedUsers || [];
+                    if (!currentAllowed.includes(currentUser.uid)) {
+                        await updateDoc(pRef, { allowedUsers: [...currentAllowed, currentUser.uid] });
+                    }
+                } catch(e) {}
+                loadProject(pendingProjectId, "Shared Project", pendingRealToken);
+                input.value = '';
+            } else {
+                document.getElementById('token-error').classList.remove('hidden');
+            }
+        });
+        
+        document.getElementById('btn-cancel-token').addEventListener('click', () => {
+             document.getElementById('token-modal').classList.add('hidden');
+             loadProject('default', 'Default Project', 'PUBLIC');
+        });
+
+        function generateToken() {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            let result = '';
+            for (let i = 0; i < 6; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+            return result;
+        }
+
+        let unsubscribeNodes = null;
+        let unsubscribeEdges = null;
+
+        function loadProject(id, name, token) {
+            currentProjectId = id;
+            currentProjectName = name;
+            currentProjectToken = token;
+            
+            document.getElementById('current-project-name').innerText = name;
+            document.getElementById('display-token').value = token || "NONE";
+            
+            selectedNodeIds.clear();
+            exitConnectionMode();
+            nodes = {}; edges = {}; rawNodes = {}; rawEdges = {};
+            nodesLayer.innerHTML = ''; edgesLayer.innerHTML = '';
+            
+            try {
+                const newUrl = new URL(window.location);
+                newUrl.searchParams.set('project', id);
+                window.history.replaceState({}, '', newUrl);
+            } catch (e) {}
+
+            if(unsubscribeNodes) unsubscribeNodes();
+            if(unsubscribeEdges) unsubscribeEdges();
+            
+            subscribeToNodes();
+            subscribeToEdges();
+        }
+
+        // --- Default Dark Mode Check ---
+        const html = document.documentElement;
+        if (localStorage.getItem('synapse_theme') !== 'light') {
+            html.classList.add('dark');
+        }
+        document.getElementById('btn-theme-toggle').addEventListener('click', () => {
+            html.classList.toggle('dark');
+            localStorage.setItem('synapse_theme', html.classList.contains('dark') ? 'dark' : 'light');
+        });
+
+        // --- Core Functions ---
+        function subscribeToProjects() {
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'synapse_projects'), (snapshot) => {
+                const projects = [];
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    if (doc.id === 'default' || data.createdBy === currentUser.uid || (data.allowedUsers && data.allowedUsers.includes(currentUser.uid))) {
+                        projects.push({ id: doc.id, ...data });
+                    }
+                });
+                if (!projects.find(p => p.id === 'default')) projects.unshift({ id: 'default', name: 'Default Project', accessCode: 'PUBLIC' });
+                
+                const current = projects.find(p => p.id === currentProjectId);
+                if (current) {
+                    currentProjectName = current.name;
+                    document.getElementById('current-project-name').innerText = current.name;
+                }
+                
+                renderProjectList(projects);
+            }, (error) => {});
+        }
+
+        function renderProjectList(projects) {
+            const list = document.getElementById('project-list');
+            list.innerHTML = '';
+            projects.sort((a,b) => {
+                if (a.id === currentProjectId) return -1;
+                if (b.id === currentProjectId) return 1;
+                return (a.name || '').localeCompare(b.name || '');
+            });
+            projects.forEach(p => {
+                const div = document.createElement('div');
+                div.className = `project-item p-3 rounded-xl border cursor-pointer flex justify-between items-center transition-all duration-200 mb-2 ${p.id === currentProjectId ? 'active border-blue-500 shadow-md' : 'border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800/50'}`;
+                div.innerHTML = `<div class="flex items-center gap-3"><span class="font-medium text-gray-700 dark:text-gray-200">${p.name}</span></div>${p.id === currentProjectId ? '<div class="h-2 w-2 rounded-full bg-blue-500"></div>' : ''}`;
+                div.onclick = () => { loadProject(p.id, p.name, p.accessCode); document.getElementById('project-modal').classList.add('hidden'); };
+                list.appendChild(div);
+            });
+        }
+
+        async function createNewProject() {
+            const name = document.getElementById('new-project-name').value.trim();
+            if (!name) return;
+            const token = generateToken();
+            try {
+                const docRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'synapse_projects'), {
+                    name, createdBy: currentUser.uid, createdAt: serverTimestamp(), accessCode: token, allowedUsers: [currentUser.uid]
+                });
+                document.getElementById('new-project-name').value = '';
+                loadProject(docRef.id, name, token);
+                document.getElementById('project-modal').classList.add('hidden');
+            } catch (err) { alert("Error creating project."); }
+        }
+
+        function subscribeToNodes() {
+            unsubscribeNodes = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'synapse_nodes'), (snapshot) => {
+                snapshot.docChanges().forEach((change) => {
+                    const data = change.doc.data();
+                    const id = change.doc.id;
+                    const pId = data.projectId || 'default';
+                    if (change.type === "added" || change.type === "modified") {
+                        rawNodes[id] = { id, ...data, projectId: pId };
+                        if (pId === currentProjectId) {
+                            if (isDragging && dragNodeId === id) return;
+                            nodes[id] = rawNodes[id];
+                            renderNode(id);
+                            updateEdgesForNode(id);
+                        }
+                    }
+                    if (change.type === "removed") {
+                        delete rawNodes[id]; delete nodes[id]; document.getElementById(`node-${id}`)?.remove();
+                    }
+                });
+            }, (error) => {});
+        }
+
+        function subscribeToEdges() {
+            unsubscribeEdges = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'synapse_edges'), (snapshot) => {
+                snapshot.docChanges().forEach((change) => {
+                    const data = change.doc.data();
+                    const id = change.doc.id;
+                    const pId = data.projectId || 'default';
+                    if (change.type === "added" || change.type === "modified") {
+                        rawEdges[id] = { id, ...data, projectId: pId };
+                        if (pId === currentProjectId) {
+                            edges[id] = rawEdges[id];
+                            renderEdge(id);
+                        }
+                    }
+                    if (change.type === "removed") {
+                        delete rawEdges[id]; delete edges[id]; document.getElementById(`edge-${id}`)?.remove();
+                    }
+                });
+            }, (error) => {});
+        }
+
+        // --- Render Nodes & Edges ---
+        function renderNode(id) {
+            const nodeData = nodes[id];
+            if (!nodeData) return;
+            let el = document.getElementById(`node-${id}`);
+            if (!el) {
+                el = document.createElement('div');
+                el.id = `node-${id}`;
+                el.className = 'node absolute flex flex-col gap-0 min-w-[200px] max-w-[320px] p-0 rounded-2xl cursor-grab active:cursor-grabbing bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl border border-white/40 dark:border-gray-700/50 shadow-md group select-none';
+                el.dataset.id = id;
+                
+                const header = document.createElement('div');
+                header.className = 'w-full h-3 pt-3 px-3 handle';
+                const pill = document.createElement('div');
+                pill.className = 'w-16 h-1.5 mx-auto bg-gradient-to-r from-blue-400 to-purple-500 rounded-full opacity-50 group-hover:opacity-100 transition-opacity';
+                header.appendChild(pill);
+                el.appendChild(header);
+
+                const container = document.createElement('div');
+                container.className = 'p-4 pt-1 flex flex-col gap-2';
+
+                if (nodeData.type === 'image') {
+                    const imgDiv = document.createElement('div');
+                    imgDiv.className = 'w-full mb-1 flex justify-center bg-gray-50 dark:bg-gray-900/50 rounded-lg overflow-hidden border border-gray-100 dark:border-gray-700/50';
+                    const img = document.createElement('img');
+                    img.src = nodeData.src; img.className = 'pointer-events-none max-h-[220px] w-full object-contain';
+                    imgDiv.appendChild(img);
+                    container.appendChild(imgDiv);
+                }
+
+                const content = document.createElement('div');
+                content.className = 'outline-none text-lg text-gray-800 dark:text-gray-100 font-medium text-center bg-transparent break-words leading-relaxed py-1';
+                content.innerText = nodeData.label || (nodeData.type === 'image' ? "Caption" : "New Idea");
+                
+                // Content events
+                content.addEventListener('dblclick', (e) => {
+                    e.stopPropagation(); content.contentEditable = true; content.focus();
+                    content.classList.remove('cursor-grab'); content.classList.add('cursor-text', 'select-text');
+                });
+                content.addEventListener('blur', () => {
+                    content.contentEditable = false; content.classList.remove('cursor-text', 'select-text');
+                    if(nodes[id].label !== content.innerText) updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'synapse_nodes', id), { label: content.innerText });
+                });
+                content.addEventListener('keydown', (e) => { if(e.key==='Enter' && !e.shiftKey) { e.preventDefault(); content.blur(); } });
+                
+                container.appendChild(content);
+                el.appendChild(container);
+                el.addEventListener('mousedown', (e) => handleNodeMouseDown(e, id));
+                nodesLayer.appendChild(el);
+            }
+            el.style.left = `${nodeData.x}px`;
+            el.style.top = `${nodeData.y}px`;
+            el.classList.remove('selected', 'connecting-source');
+            if (isConnecting && connectionSourceId === id) el.classList.add('connecting-source');
+            else if (selectedNodeIds.has(id)) el.classList.add('selected');
+        }
+
+        function renderEdge(id) {
+            const edgeData = edges[id];
+            if (!edgeData || !nodes[edgeData.from] || !nodes[edgeData.to]) return;
+            let el = document.getElementById(`edge-${id}`);
+            if (!el) {
+                el = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                el.id = `edge-${id}`;
+                edgesLayer.appendChild(el);
+            }
+            const from = nodes[edgeData.from], to = nodes[edgeData.to];
+            const fromX = from.x + 75, fromY = from.y + 30;
+            const toX = to.x + 75, toY = to.y + 30;
+            const deltaX = Math.abs(toX - fromX);
+            const cpOffset = Math.max(deltaX * 0.5, 50);
+            el.setAttribute("d", `M ${fromX} ${fromY} C ${fromX} ${fromY + cpOffset}, ${toX} ${toY - cpOffset}, ${toX} ${toY}`);
+        }
+
+        function removeNodeDOM(id) { document.getElementById(`node-${id}`)?.remove(); }
+        function removeEdgeDOM(id) { document.getElementById(`edge-${id}`)?.remove(); }
+        function updateEdgesForNode(id) { Object.values(edges).forEach(e => { if(e.from === id || e.to === id) renderEdge(e.id); }); }
+
+        // --- Interactions ---
+        canvasContainer.addEventListener('dblclick', async (e) => {
+            if (e.target !== canvasContainer && e.target !== edgesLayer) return;
+            
+            const rect = canvasContainer.getBoundingClientRect();
+            const tempId = 'temp-' + Date.now();
+            const nodeData = {
+                x: e.clientX - rect.left - 75, y: e.clientY - rect.top - 25,
+                label: "New Idea", projectId: currentProjectId, createdAt: serverTimestamp(), createdBy: currentUser.uid, type: 'text'
+            };
+
+            // Optimistic Render
+            nodes[tempId] = { id: tempId, ...nodeData };
+            renderNode(tempId);
+
+            try {
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'synapse_nodes'), nodeData);
+            } catch (err) {
+                console.warn("DB Save failed (Offline?):", err);
+            }
+        });
+
+        let dragStartPos = { x: 0, y: 0 };
+
+        function handleNodeMouseDown(e, id) {
+            if (e.target.isContentEditable) return;
+            e.stopPropagation();
+            
+            // LINKING LOGIC
+            if (isConnecting) {
+                if (!connectionSourceId) { 
+                    connectionSourceId = id; 
+                    renderNode(id); 
+                    // NO RETURN HERE - ALLOW DRAG
+                } else if (connectionSourceId !== id) {
+                    const edgeData = { from: connectionSourceId, to: id, projectId: currentProjectId, createdAt: serverTimestamp() };
+                    
+                    // Optimistic Edge
+                    const tempEdgeId = 'temp-edge-' + Date.now();
+                    edges[tempEdgeId] = { id: tempEdgeId, ...edgeData };
+                    renderEdge(tempEdgeId);
+
+                    addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'synapse_edges'), edgeData)
+                    .then(() => {
+                        delete edges[tempEdgeId];
+                        removeEdgeDOM(tempEdgeId);
+                    })
+                    .catch(e => console.warn(e));
+                    
+                    connectionSourceId = null; 
+                    clearTempLine(); 
+                    Object.keys(nodes).forEach(renderNode);
+                    // NO RETURN HERE - ALLOW DRAG of Target Node
+                }
+                // Fallthrough to allow dragging even if we just clicked/linked
+            }
+
+            // SELECTION LOGIC
+            if (e.shiftKey) selectedNodeIds.has(id) ? selectedNodeIds.delete(id) : selectedNodeIds.add(id);
+            else if (!selectedNodeIds.has(id)) { selectedNodeIds.clear(); selectedNodeIds.add(id); }
+            
+            updateToolbar();
+            Object.keys(nodes).forEach(renderNode);
+            
+            // DRAG INIT
+            isDragging = true; dragNodeId = id;
+            dragStartPos = { x: nodes[id].x, y: nodes[id].y }; 
+            dragOffset = { x: e.clientX - nodes[id].x, y: e.clientY - nodes[id].y }; 
+        }
+
+        window.addEventListener('mousemove', (e) => {
+            if (isConnecting && connectionSourceId) updateTempLine(e);
+            if (!isDragging || !dragNodeId) return;
+            const x = e.clientX - dragOffset.x;
+            const y = e.clientY - dragOffset.y;
+            nodes[dragNodeId].x = x; nodes[dragNodeId].y = y;
+            renderNode(dragNodeId); updateEdgesForNode(dragNodeId);
+        });
+
+        window.addEventListener('mouseup', async () => {
+            if (isDragging && dragNodeId) {
+                const idToUpdate = dragNodeId;
+                const finalX = nodes[idToUpdate].x;
+                const finalY = nodes[idToUpdate].y;
+                
+                isDragging = false; 
+                dragNodeId = null;
+
+                if (!idToUpdate.startsWith('temp-')) {
+                    updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'synapse_nodes', idToUpdate), { x: finalX, y: finalY }).catch(e => {});
+                }
+            }
+        });
+
+        // --- Temp Line ---
+        function updateTempLine(e) {
+            const src = nodes[connectionSourceId]; if(!src) return;
+            const rect = canvasContainer.getBoundingClientRect();
+            const fromX = src.x + 75, fromY = src.y + 30;
+            const toX = e.clientX - rect.left, toY = e.clientY - rect.top;
+            let el = document.getElementById('temp-connection-line');
+            if (!el) { el = document.createElementNS("http://www.w3.org/2000/svg", "path"); el.id = 'temp-connection-line'; el.setAttribute("class", "temp-line"); edgesLayer.appendChild(el); }
+            const deltaX = Math.abs(toX - fromX), cpOffset = Math.max(deltaX * 0.5, 50);
+            el.setAttribute("d", `M ${fromX} ${fromY} C ${fromX} ${fromY + cpOffset}, ${toX} ${toY - cpOffset}, ${toX} ${toY}`);
+        }
+        function clearTempLine() { document.getElementById('temp-connection-line')?.remove(); }
+        
+        function exitConnectionMode() { 
+            isConnecting = false; connectionSourceId = null; clearTempLine(); 
+            linkingIndicator.classList.add('hidden'); 
+            updateToolbar();
+            Object.keys(nodes).forEach(renderNode); 
+        }
+
+        // --- Toolbar Logic ---
+        function updateToolbar() {
+            const btnLink = document.getElementById('btn-link');
+            const dot = document.getElementById('link-active-dot');
+            const btnDelete = document.getElementById('btn-delete');
+            const btnUnlink = document.getElementById('btn-unlink');
+            
+            if (isConnecting) {
+                btnLink.classList.add('bg-blue-100', 'text-blue-600', 'dark:bg-blue-900', 'dark:text-blue-300');
+                dot.classList.remove('hidden');
+                canvasContainer.classList.add('cursor-crosshair');
+                linkingIndicator.classList.remove('hidden'); 
+            } else {
+                btnLink.classList.remove('bg-blue-100', 'text-blue-600', 'dark:bg-blue-900', 'dark:text-blue-300');
+                dot.classList.add('hidden');
+                canvasContainer.classList.remove('cursor-crosshair');
+                linkingIndicator.classList.add('hidden'); 
+            }
+            
+            if (selectedNodeIds.size > 0) {
+                btnDelete.classList.remove('opacity-50', 'cursor-not-allowed');
+                btnDelete.disabled = false;
+            } else {
+                btnDelete.classList.add('opacity-50', 'cursor-not-allowed');
+                btnDelete.disabled = true;
+            }
+
+            // Unlink Button Logic: Robust Check
+            let showUnlink = false;
+            if (selectedNodeIds.size === 2) {
+                const [a, b] = Array.from(selectedNodeIds);
+                // Check edge existence in either direction
+                const isConnected = Object.values(edges).some(e => 
+                    (e.from === a && e.to === b) || (e.from === b && e.to === a)
+                );
+                if (isConnected) showUnlink = true;
+            }
+            
+            if (showUnlink) btnUnlink.classList.remove('hidden');
+            else btnUnlink.classList.add('hidden');
+        }
+
+        // --- Event Listeners ---
+        document.getElementById('btn-add').addEventListener('click', () => canvasContainer.dispatchEvent(new MouseEvent('dblclick', { clientX: window.innerWidth/2, clientY: window.innerHeight/2 })));
+        
+        document.getElementById('btn-link').addEventListener('click', () => {
+            if (isConnecting) exitConnectionMode();
+            else {
+                isConnecting = true;
+                if (!localStorage.getItem(HAS_SEEN_LINK_HELP)) {
+                    document.getElementById('toast').classList.remove('opacity-0', 'pointer-events-none');
+                    setTimeout(() => document.getElementById('toast').classList.add('opacity-0', 'pointer-events-none'), 8000);
+                    localStorage.setItem(HAS_SEEN_LINK_HELP, 'true');
+                }
+                updateToolbar(); // Update visuals immediately
+                Object.keys(nodes).forEach(renderNode);
+            }
+        });
+
+        // UNLINK Logic
+        btnUnlink.addEventListener('click', async () => {
+            if (selectedNodeIds.size !== 2) return;
+            const [a, b] = Array.from(selectedNodeIds);
+            const edge = Object.values(edges).find(e => (e.from === a && e.to === b) || (e.from === b && e.to === a));
+            if (edge) {
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'synapse_edges', edge.id));
+                updateToolbar(); // Refresh toolbar state
+            }
+        });
+
+        // ENHANCED DELETE (Cascading, No Undo)
+        document.getElementById('btn-delete').addEventListener('click', async () => {
+            const idsToDelete = Array.from(selectedNodeIds);
+            if (idsToDelete.length === 0) return;
+
+            // Find connected edges to cascade delete
+            const edgeIdsToDelete = new Set();
+            
+            // Collect connected edges for all deleting nodes
+            idsToDelete.forEach(id => {
+                Object.values(edges).forEach(edge => {
+                    if (edge.from === id || edge.to === id) {
+                        edgeIdsToDelete.add(edge.id);
+                    }
+                });
+            });
+
+            // Perform Deletions
+            const promises = [];
+            idsToDelete.forEach(id => {
+                delete nodes[id];
+                removeNodeDOM(id);
+                if (!id.startsWith('temp-')) promises.push(deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'synapse_nodes', id)));
+            });
+
+            edgeIdsToDelete.forEach(id => {
+                delete edges[id];
+                removeEdgeDOM(id);
+                promises.push(deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'synapse_edges', id)));
+            });
+
+            await Promise.all(promises).catch(e => console.error("Delete failed", e));
+
+            selectedNodeIds.clear();
+            updateToolbar();
+        });
+
+        window.addEventListener('keydown', (e) => { if(e.key === 'Escape') exitConnectionMode(); });
+        canvasContainer.addEventListener('mousedown', (e) => { if(e.target===canvasContainer || e.target===edgesLayer) { if(isConnecting){exitConnectionMode();return;} selectedNodeIds.clear(); updateToolbar(); Object.keys(nodes).forEach(renderNode); }});
+
+        document.getElementById('btn-image').addEventListener('click', () => document.getElementById('hidden-file-input').click());
+        document.getElementById('hidden-file-input').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file && file.size <= 500 * 1024) {
+                const reader = new FileReader();
+                reader.onload = async (ev) => {
+                    const rect = canvasContainer.getBoundingClientRect();
+                    const tempId = 'temp-' + Date.now();
+                    const nodeData = {
+                        x: rect.width/2 - 75, y: rect.height/2 - 75, label: file.name, src: ev.target.result, type: 'image',
+                        projectId: currentProjectId, createdAt: serverTimestamp(), createdBy: currentUser.uid
+                    };
+                    nodes[tempId] = { id: tempId, ...nodeData };
+                    renderNode(tempId);
+                    
+                    addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'synapse_nodes'), nodeData).catch(e => console.warn(e));
+                };
+                reader.readAsDataURL(file);
+            } else { alert("Image too large (Max 500KB)"); }
+            e.target.value = '';
+        });
+
+        // --- Screenshots ---
+        document.getElementById('btn-screenshot').addEventListener('click', async () => {
+            try {
+                const canvas = await html2canvas(document.body, {
+                    ignoreElements: (el) => el.classList.contains('absolute') && !el.id.includes('canvas-container'),
+                    backgroundColor: html.classList.contains('dark') ? '#111827' : '#f9fafb'
+                });
+                const link = document.createElement('a'); link.download = 'synapse-map.png'; link.href = canvas.toDataURL(); link.click();
+            } catch (e) { alert("Screenshot failed"); }
+        });
+
+        // --- Modals ---
+        document.getElementById('btn-projects').addEventListener('click', () => document.getElementById('project-modal').classList.remove('hidden'));
+        document.getElementById('btn-close-projects').addEventListener('click', () => document.getElementById('project-modal').classList.add('hidden'));
+        document.getElementById('btn-invite').addEventListener('click', () => {
+            try { const url = new URL(window.location); url.searchParams.set('project', currentProjectId); document.getElementById('invite-link').value = url.toString(); } catch(e){}
+            document.getElementById('invite-modal').classList.remove('hidden');
+        });
+        document.getElementById('btn-close-invite').addEventListener('click', () => document.getElementById('invite-modal').classList.add('hidden'));
+        document.getElementById('btn-user-menu').addEventListener('click', () => document.getElementById('user-modal').classList.remove('hidden'));
+        document.getElementById('btn-close-user').addEventListener('click', () => document.getElementById('user-modal').classList.add('hidden'));
+        document.getElementById('btn-sign-out').addEventListener('click', () => signOut(auth).then(() => window.location.reload()));
+        document.getElementById('btn-copy-link').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('invite-link').value));
+        document.getElementById('btn-copy-token').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('display-token').value));
+
+        // --- Presence ---
+        function startPresence(user) {
+            const ref = doc(db, 'artifacts', appId, 'public', 'data', 'synapse_presence', user.uid);
+            const update = () => setDoc(ref, { uid: user.uid, color: myColor, projectId: currentProjectId, lastSeen: serverTimestamp() }, { merge: true }).catch(e => {});
+            update(); setInterval(update, 10000);
+            
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'synapse_presence'), (snap) => {
+                const now = Date.now(), list = document.getElementById('participants-list'); list.innerHTML = '';
+                const active = [];
+                snap.forEach(d => { 
+                    const data = d.data(); 
+                    if(now - (data.lastSeen?.toMillis?.() || 0) < 60000 && (data.projectId === currentProjectId || (!data.projectId && currentProjectId === 'default'))) active.push(data); 
+                });
+                active.slice(0,4).forEach(u => {
+                    const div = document.createElement('div'); div.className = 'avatar'; div.style.backgroundColor = u.color; div.innerText = 'U';
+                    if(u.uid === currentUser.uid) { div.style.border = '2px solid #3b82f6'; div.style.zIndex = 10; }
+                    list.appendChild(div);
+                });
+            }, (e) => {});
+        }
+
+        // Init Icons
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    </script>
+</body>
+</html>
