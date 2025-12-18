@@ -382,10 +382,17 @@
         import { getFirestore, collection, doc, setDoc, getDoc, deleteDoc, onSnapshot, serverTimestamp, updateDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- Configuration ---
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+       const firebaseConfig = {
+  apiKey: "AIzaSyDej8-tw_okEQmvRH1LINLGNvePg2bBYfk",
+  authDomain: "synapse-live.firebaseapp.com",
+  projectId: "synapse-live",
+  storageBucket: "synapse-live.firebasestorage.app",
+  messagingSenderId: "145967071794",
+  appId: "1:145967071794:web:1d48bc5be3152a3ece722b",
+  measurementId: "G-D0KQN0QQ7G"
+};
 
-        if (!firebaseConfig) console.error("Firebase config not found.");
+        const appId = firebaseConfig.appId;
 
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
