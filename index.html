@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Synapse - Collaborative Mind Map</title>
     
     <!-- Tailwind CSS -->
@@ -27,12 +27,28 @@
             font-family: 'Inter', sans-serif;
             overflow: hidden; 
             user-select: none;
+            touch-action: none; /* Prevent browser zooming/scrolling on mobile */
+        }
+
+        /* Canvas Container */
+        #canvas-container {
+            cursor: grab;
+        }
+        #canvas-container:active {
+            cursor: grabbing;
+        }
+        #canvas-container.is-dragging-node {
+            cursor: default;
+        }
+        #canvas-container.is-connecting {
+            cursor: crosshair;
         }
 
         /* Dot Grid Background */
         .bg-grid {
-            background-size: 24px 24px;
-            background-image: radial-gradient(circle, #e5e7eb 1.5px, transparent 1.5px);
+            background-repeat: repeat;
+            /* background-size and position will be handled by JS for infinite effect */
+            background-image: radial-gradient(circle, #cbd5e1 1.5px, transparent 1.5px);
         }
         
         /* Dark Mode Grid */
@@ -40,18 +56,42 @@
             background-image: radial-gradient(circle, #374151 1.5px, transparent 1.5px);
         }
 
+        /* Viewport Layer */
+        #viewport {
+            transform-origin: 0 0;
+            will-change: transform;
+            position: absolute;
+            top: 0; 
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* Let clicks pass through to container for panning */
+        }
+
+        #edges-layer, #nodes-layer {
+            position: absolute;
+            top: 0; left: 0;
+            width: 0; height: 0; /* Overflow visible handles the rest */
+            overflow: visible;
+        }
+
+        /* Allow interaction with nodes */
+        #nodes-layer {
+            pointer-events: auto;
+        }
+
         /* Node Styling - Animations */
         .node {
-            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            transition: box-shadow 0.2s, transform 0.1s; /* Removed 'all' to prevent laggy dragging */
             touch-action: none;
-            will-change: transform, box-shadow;
+            will-change: transform;
+            position: absolute; /* Relative to #nodes-layer */
         }
         
         /* Selected State */
         .node.selected {
             @apply ring-2 ring-blue-500 ring-offset-2 ring-offset-gray-50 dark:ring-offset-gray-900;
             box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5), 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-            transform: translateY(-2px);
             z-index: 50;
         }
         
@@ -69,6 +109,8 @@
             stroke-width: 2px;
             transition: stroke 0.3s;
             filter: drop-shadow(0 1px 1px rgba(0,0,0,0.05));
+            pointer-events: auto; /* Allow selecting edges */
+            cursor: pointer;
         }
         .dark path { stroke: #6b7280; } 
         
@@ -83,6 +125,7 @@
             stroke-width: 2px;
             stroke-dasharray: 6, 6;
             animation: dash 1s linear infinite;
+            pointer-events: none;
         }
         @keyframes dash { to { stroke-dashoffset: -12; } }
 
@@ -116,21 +159,10 @@
         .project-item.active { background-color: #eff6ff; border-color: #3b82f6; }
         .dark .project-item.active { background-color: #1e3a8a; border-color: #3b82f6; }
 
-        .cursor-crosshair { cursor: crosshair !important; }
-        
         /* Toggle Switch */
         .toggle-checkbox:checked { right: 0; border-color: #3b82f6; }
         .toggle-checkbox:checked + .toggle-label { background-color: #3b82f6; }
 
-        /* Access Token Badge */
-        .token-badge {
-            font-family: monospace; letter-spacing: 0.1em;
-            background-color: #f3f4f6; color: #374151;
-            padding: 2px 6px; border-radius: 4px; font-weight: bold;
-            border: 1px dashed #9ca3af;
-        }
-        .dark .token-badge { background-color: #374151; color: #e5e7eb; border-color: #6b7280; }
-        
         /* Scrollbar for Project List */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
@@ -142,13 +174,21 @@
 <body class="bg-gray-50 dark:bg-gray-900 h-screen w-screen relative overflow-hidden transition-colors duration-200 selection:bg-blue-200 dark:selection:bg-blue-900">
 
     <!-- Canvas Container -->
-    <div id="canvas-container" class="absolute inset-0 w-full h-full bg-grid overflow-hidden cursor-grab active:cursor-grabbing">
-        <svg id="edges-layer" class="absolute inset-0 w-full h-full pointer-events-none z-0"></svg>
-        <div id="nodes-layer" class="absolute inset-0 w-full h-full z-10"></div>
+    <div id="canvas-container" class="absolute inset-0 w-full h-full bg-grid overflow-hidden">
+        <!-- Viewport Group (Scaled & Panned) -->
+        <div id="viewport">
+            <svg id="edges-layer"></svg>
+            <div id="nodes-layer"></div>
+        </div>
     </div>
 
     <!-- Hidden File Input -->
     <input type="file" id="hidden-file-input" accept="image/png, image/jpeg, image/gif" class="hidden">
+
+    <!-- UI Overlay: Zoom Indicator -->
+    <div class="absolute bottom-6 left-6 z-40 bg-white/90 dark:bg-gray-800/90 backdrop-blur border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-1.5 shadow-lg text-xs font-mono font-medium text-gray-600 dark:text-gray-300 pointer-events-none select-none">
+        <span id="zoom-level">100%</span>
+    </div>
 
     <!-- UI Overlay: Toolbar -->
     <div class="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-white/90 dark:bg-gray-800/90 backdrop-blur-md dark:border-gray-700 rounded-2xl shadow-2xl border border-white/20 px-6 py-3 flex items-center gap-4 z-50 transition-all duration-200 hover:scale-[1.02]">
@@ -221,7 +261,7 @@
         </div>
     </div>
 
-    <!-- Token Verification Modal (Locked Screen) -->
+    <!-- Token Verification Modal (Locked Screen for Links) -->
     <div id="token-modal" class="fixed inset-0 z-[110] hidden bg-gray-900/90 backdrop-blur-md flex items-center justify-center p-4">
         <div class="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl w-full max-w-md p-8 transform transition-all text-center border border-white/10">
             <div class="mx-auto w-20 h-20 bg-red-50 dark:bg-red-900/20 rounded-full flex items-center justify-center mb-6 ring-8 ring-red-50/50 dark:ring-red-900/10">
@@ -296,7 +336,7 @@
         </div>
     </div>
 
-    <!-- Invite Modal (Updated with Token) -->
+    <!-- Invite Modal -->
     <div id="invite-modal" class="fixed inset-0 z-[100] hidden modal-overlay flex items-center justify-center p-4">
         <div class="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl w-full max-w-md p-6 border border-gray-100 dark:border-gray-700">
             <div class="flex justify-between items-center mb-6">
@@ -338,7 +378,7 @@
 
     <!-- Project Modal -->
     <div id="project-modal" class="fixed inset-0 z-[100] hidden modal-overlay flex items-center justify-center p-4">
-        <div class="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl w-full max-w-lg p-6 flex flex-col max-h-[80vh] border border-gray-100 dark:border-gray-700">
+        <div class="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl w-full max-w-lg p-6 flex flex-col max-h-[85vh] border border-gray-100 dark:border-gray-700">
             <div class="flex justify-between items-center mb-6">
                 <h3 class="text-xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
                     <div class="p-2 bg-indigo-100 dark:bg-indigo-900/30 rounded-xl">
@@ -351,12 +391,29 @@
                 </button>
             </div>
             
-            <div class="flex gap-2 mb-6">
-                <input id="new-project-name" type="text" placeholder="New Project Name..." class="flex-1 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 dark:text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
-                <button id="btn-create-project" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-xl font-bold text-sm transition-colors shadow-lg shadow-blue-500/20">Create</button>
+            <div class="space-y-5 mb-6">
+                <!-- Join Existing -->
+                <div>
+                    <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide ml-1 mb-2 block">Join via Access Token</label>
+                    <div class="flex gap-2">
+                        <input id="join-project-token" type="text" placeholder="Enter 6-char token..." class="font-mono uppercase tracking-widest flex-1 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 dark:text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 transition-all">
+                        <button id="btn-join-project" class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-xl font-bold text-sm transition-colors shadow-lg shadow-green-500/20 whitespace-nowrap">Join Project</button>
+                    </div>
+                </div>
+
+                <div class="border-t border-gray-100 dark:border-gray-700"></div>
+
+                <!-- Create New -->
+                <div>
+                    <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide ml-1 mb-2 block">Create New Project</label>
+                    <div class="flex gap-2">
+                        <input id="new-project-name" type="text" placeholder="Project Name..." class="flex-1 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 dark:text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+                        <button id="btn-create-project" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-xl font-bold text-sm transition-colors shadow-lg shadow-blue-500/20">Create</button>
+                    </div>
+                </div>
             </div>
             
-            <div class="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-3 px-1">Recent Projects</div>
+            <div class="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-3 px-1 pt-2">Recent Projects</div>
             <div id="project-list" class="flex-1 overflow-y-auto space-y-2 pr-2"></div>
         </div>
     </div>
@@ -379,7 +436,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, doc, setDoc, getDoc, deleteDoc, onSnapshot, serverTimestamp, updateDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, onSnapshot, serverTimestamp, updateDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- Configuration ---
        const firebaseConfig = {
@@ -406,14 +463,25 @@
         let currentProjectToken = 'PUBLIC';
         let nodes = {}; let edges = {}; 
         let selectedNodeIds = new Set();
-        let isDragging = false;
-        let dragNodeId = null;
-        let dragOffset = { x: 0, y: 0 };
         let isConnecting = false;
         let connectionSourceId = null;
         const HAS_SEEN_LINK_HELP = 'synapse_link_help_seen_v2';
 
+        // --- Viewport State (Pan & Zoom) ---
+        let pan = { x: 0, y: 0 };
+        let scale = 1;
+        let isPanning = false;
+        let panStartMouse = { x: 0, y: 0 };
+        let panStartOffset = { x: 0, y: 0 };
+
+        // --- Dragging Nodes State ---
+        let isDraggingNode = false;
+        let dragNodeId = null;
+        let dragStartMouse = { x: 0, y: 0 };
+        let dragStartNodePos = { x: 0, y: 0 };
+
         // --- DOM ---
+        const viewport = document.getElementById('viewport');
         const nodesLayer = document.getElementById('nodes-layer');
         const edgesLayer = document.getElementById('edges-layer');
         const canvasContainer = document.getElementById('canvas-container');
@@ -484,7 +552,7 @@
             }
         }
 
-        // 2. Show Token Modal
+        // 2. Show Token Modal (For Link Access)
         let pendingProjectId = null;
         let pendingRealToken = null;
         
@@ -495,7 +563,7 @@
             modal.classList.remove('hidden');
         }
 
-        // 3. Verify Token Button
+        // 3. Verify Token Button (Locked Screen)
         document.getElementById('btn-verify-token').addEventListener('click', async () => {
             const input = document.getElementById('token-input');
             const userToken = input.value.trim().toUpperCase();
@@ -506,7 +574,7 @@
                 err.classList.add('hidden');
                 document.getElementById('token-modal').classList.add('hidden');
                 
-                // Add user to allowed list in DB so they don't type it again
+                // Add user to allowed list in DB
                 const pRef = doc(db, 'artifacts', appId, 'public', 'data', 'synapse_projects', pendingProjectId);
                 try {
                     const snap = await getDoc(pRef);
@@ -516,7 +584,7 @@
                     }
                 } catch(e) { console.error("Error adding user to allow list", e); }
 
-                loadProject(pendingProjectId, "Shared Project", pendingRealToken); // Name might update from listener later
+                loadProject(pendingProjectId, "Shared Project", pendingRealToken); 
                 input.value = '';
             } else {
                 // FAIL
@@ -540,6 +608,57 @@
             return result;
         }
 
+        // 5. MANUAL JOIN VIA TOKEN (Inside Project Modal)
+        document.getElementById('btn-join-project').addEventListener('click', async () => {
+            const input = document.getElementById('join-project-token');
+            const token = input.value.trim().toUpperCase();
+            if(!token || token.length < 6) {
+                alert("Please enter a valid 6-character token");
+                return;
+            }
+            
+            const btn = document.getElementById('btn-join-project');
+            const originalText = btn.innerText;
+            btn.innerText = "Searching...";
+            btn.disabled = true;
+
+            try {
+                // Scan all projects to find token (Dataset is small, this is acceptable given Rule 2 constraints)
+                const querySnapshot = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'synapse_projects'));
+                let targetProject = null;
+                
+                querySnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    if(data.accessCode === token) {
+                        targetProject = { id: doc.id, ...data };
+                    }
+                });
+
+                if(targetProject) {
+                    // Update allowed users
+                    const currentAllowed = targetProject.allowedUsers || [];
+                    if (!currentAllowed.includes(currentUser.uid)) {
+                        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'synapse_projects', targetProject.id), { 
+                            allowedUsers: [...currentAllowed, currentUser.uid] 
+                        });
+                    }
+                    
+                    loadProject(targetProject.id, targetProject.name, targetProject.accessCode);
+                    document.getElementById('project-modal').classList.add('hidden');
+                    input.value = '';
+                } else {
+                    alert("Project not found with this token.");
+                }
+            } catch (error) {
+                console.error("Join error:", error);
+                alert("Error joining project.");
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        });
+
+
         // --- Load Project Logic ---
         let unsubscribeNodes = null;
         let unsubscribeEdges = null;
@@ -553,12 +672,17 @@
             document.getElementById('current-project-name').innerText = name;
             document.getElementById('display-token').value = token || "NONE";
             
-            // Clear Canvas
+            // Reset Canvas & Viewport
             selectedNodeIds.clear();
             exitConnectionMode();
             nodes = {}; edges = {}; rawNodes = {}; rawEdges = {};
             nodesLayer.innerHTML = ''; edgesLayer.innerHTML = '';
             
+            // Reset View
+            pan = { x: 0, y: 0 };
+            scale = 1;
+            updateViewport();
+
             // Update URL
             safeUpdateUrl(id);
 
@@ -570,15 +694,96 @@
             subscribeToEdges();
         }
 
+        // --- Viewport & Panning Logic ---
+        function updateViewport() {
+            viewport.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${scale})`;
+            // Update grid for infinite effect
+            const gridSize = 24 * scale;
+            canvasContainer.style.backgroundSize = `${gridSize}px ${gridSize}px`;
+            canvasContainer.style.backgroundPosition = `${pan.x}px ${pan.y}px`;
+            document.getElementById('zoom-level').innerText = `${Math.round(scale * 100)}%`;
+        }
+
+        canvasContainer.addEventListener('mousedown', (e) => {
+            if (e.target === canvasContainer || e.target === edgesLayer || e.target.closest('svg')) {
+                if (isConnecting) {
+                    exitConnectionMode();
+                    return;
+                }
+                
+                isPanning = true;
+                panStartMouse = { x: e.clientX, y: e.clientY };
+                panStartOffset = { x: pan.x, y: pan.y };
+                canvasContainer.style.cursor = 'grabbing';
+                
+                if(!e.shiftKey) {
+                    selectedNodeIds.clear();
+                    updateToolbar();
+                    Object.keys(nodes).forEach(renderNode);
+                }
+            }
+        });
+
+        canvasContainer.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            if (e.ctrlKey || e.metaKey) {
+                const zoomIntensity = 0.1;
+                const delta = -Math.sign(e.deltaY) * zoomIntensity;
+                const newScale = Math.min(Math.max(0.1, scale + delta), 5);
+                const rect = canvasContainer.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+                const worldX = (mouseX - pan.x) / scale;
+                const worldY = (mouseY - pan.y) / scale;
+                scale = newScale;
+                pan.x = mouseX - worldX * scale;
+                pan.y = mouseY - worldY * scale;
+                updateViewport();
+            } else {
+                pan.x -= e.deltaX;
+                pan.y -= e.deltaY;
+                updateViewport();
+            }
+        }, { passive: false });
+
+        window.addEventListener('mousemove', (e) => {
+            if (isPanning) {
+                const dx = e.clientX - panStartMouse.x;
+                const dy = e.clientY - panStartMouse.y;
+                pan.x = panStartOffset.x + dx;
+                pan.y = panStartOffset.y + dy;
+                updateViewport();
+            }
+            if (isDraggingNode && dragNodeId) {
+                const dx = (e.clientX - dragStartMouse.x) / scale;
+                const dy = (e.clientY - dragStartMouse.y) / scale;
+                nodes[dragNodeId].x = dragStartNodePos.x + dx;
+                nodes[dragNodeId].y = dragStartNodePos.y + dy;
+                renderNode(dragNodeId);
+                updateEdgesForNode(dragNodeId);
+            }
+            if (isConnecting && connectionSourceId) updateTempLine(e);
+        });
+
+        window.addEventListener('mouseup', async () => {
+            if (isPanning) {
+                isPanning = false;
+                canvasContainer.style.cursor = '';
+            }
+            if (isDraggingNode && dragNodeId) {
+                const node = nodes[dragNodeId];
+                const id = dragNodeId;
+                isDraggingNode = false;
+                dragNodeId = null;
+                canvasContainer.classList.remove('is-dragging-node');
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'synapse_nodes', id), { x: node.x, y: node.y });
+            }
+        });
+
         // --- Dark Mode Logic ---
         const btnThemeToggle = document.getElementById('btn-theme-toggle');
         const html = document.documentElement;
-        
-        // --- UPDATED LOGIC: Default to Dark if preference is NOT 'light' (handles first visit)
-        if (localStorage.getItem('synapse_theme') !== 'light') {
-            html.classList.add('dark');
-        }
-
+        if (localStorage.getItem('synapse_theme') !== 'light') { html.classList.add('dark'); }
         btnThemeToggle.addEventListener('click', () => {
             html.classList.toggle('dark');
             localStorage.setItem('synapse_theme', html.classList.contains('dark') ? 'dark' : 'light');
@@ -589,14 +794,9 @@
         const userModal = document.getElementById('user-modal');
         const btnCloseUser = document.getElementById('btn-close-user');
         const btnSignOut = document.getElementById('btn-sign-out');
-
         btnUserMenu.addEventListener('click', () => userModal.classList.remove('hidden'));
         btnCloseUser.addEventListener('click', () => userModal.classList.add('hidden'));
-        
-        btnSignOut.addEventListener('click', async () => {
-            await signOut(auth);
-            window.location.reload();
-        });
+        btnSignOut.addEventListener('click', async () => { await signOut(auth); window.location.reload(); });
 
         // --- Screenshot Logic ---
         document.getElementById('btn-screenshot').addEventListener('click', async () => {
@@ -605,7 +805,7 @@
             btn.innerHTML = `<div class="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>`;
             try {
                 const canvas = await html2canvas(document.body, {
-                    ignoreElements: (el) => el.classList.contains('absolute') && !el.id.includes('canvas-container'),
+                    ignoreElements: (el) => el.classList.contains('absolute') && !el.id.includes('canvas-container') && !el.id.includes('viewport'),
                     backgroundColor: html.classList.contains('dark') ? '#111827' : '#f9fafb'
                 });
                 const link = document.createElement('a');
@@ -615,7 +815,6 @@
             } catch (err) { alert("Failed to take screenshot."); } 
             finally { btn.innerHTML = originalIcon; lucide.createIcons(); }
         });
-
 
         // --- Helper: URL Update ---
         function safeUpdateUrl(projectId) {
@@ -627,23 +826,18 @@
         }
 
         // --- Data Sync ---
-        
         function subscribeToProjects() {
             const projectsRef = collection(db, 'artifacts', appId, 'public', 'data', 'synapse_projects');
             onSnapshot(projectsRef, (snapshot) => {
                 const projects = [];
                 snapshot.forEach(doc => {
                     const data = doc.data();
-                    // Only show projects user has access to (Created by me OR Allowed)
-                    // We also always show default
                     if (doc.id === 'default' || data.createdBy === currentUser.uid || (data.allowedUsers && data.allowedUsers.includes(currentUser.uid))) {
                         projects.push({ id: doc.id, ...data });
                     }
                 });
-                
                 if (!projects.find(p => p.id === 'default')) projects.unshift({ id: 'default', name: 'Default Project', accessCode: 'PUBLIC' });
 
-                // If currently on a project, update its name/token if changed
                 const current = projects.find(p => p.id === currentProjectId);
                 if (current) {
                     currentProjectName = current.name;
@@ -686,7 +880,6 @@
 
         function switchProject(id, name, token) {
             if (id === currentProjectId) return;
-            // No verification needed here because list only contains allowed projects
             loadProject(id, name, token);
             document.getElementById('project-modal').classList.add('hidden');
         }
@@ -705,7 +898,6 @@
                     allowedUsers: [currentUser.uid]
                 });
                 input.value = '';
-                // Directly load newly created project (we are owner)
                 loadProject(docRef.id, name, token);
                 document.getElementById('project-modal').classList.add('hidden');
             } catch (err) { alert("Failed to create project"); }
@@ -721,7 +913,7 @@
                     if (change.type === "added" || change.type === "modified") {
                         rawNodes[id] = { id, ...data, projectId: pId };
                         if (pId === currentProjectId) {
-                            if (isDragging && dragNodeId === id) return;
+                            if (isDraggingNode && dragNodeId === id) return;
                             nodes[id] = rawNodes[id];
                             renderNode(id);
                             updateEdgesForNode(id);
@@ -766,18 +958,16 @@
             if (!el) {
                 el = document.createElement('div');
                 el.id = `node-${id}`;
-                // --- PREMIUM GLASSMORPHISM NODE STYLE ---
                 el.className = 'node absolute flex flex-col gap-0 min-w-[200px] max-w-[320px] p-0 rounded-2xl cursor-grab active:cursor-grabbing ' +
                                'bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl ' + 
                                'border border-white/40 dark:border-gray-700/50 ' +
                                'shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.2)] ' +
                                'hover:shadow-[0_20px_40px_rgb(0,0,0,0.08)] hover:-translate-y-1 ' + 
-                               'group select-none'; // Added select-none
+                               'group select-none'; 
                 el.dataset.id = id;
                 
-                // Aesthetic Header Bar (Gradient Pill)
                 const headerContainer = document.createElement('div');
-                headerContainer.className = 'w-full h-3 pt-3 px-3 handle'; // Invisible drag area
+                headerContainer.className = 'w-full h-3 pt-3 px-3 handle'; 
                 const headerPill = document.createElement('div');
                 headerPill.className = 'w-16 h-1.5 mx-auto bg-gradient-to-r from-blue-400 to-purple-500 rounded-full opacity-50 group-hover:opacity-100 transition-opacity';
                 headerContainer.appendChild(headerPill);
@@ -786,9 +976,7 @@
                 const contentContainer = document.createElement('div');
                 contentContainer.className = 'p-4 pt-1 flex flex-col gap-2';
 
-                // --- CONTENT RENDER LOGIC ---
                 if (nodeData.type === 'image') {
-                    // Image Node
                     const imgContainer = document.createElement('div');
                     imgContainer.className = 'w-full mb-1 flex justify-center bg-gray-50 dark:bg-gray-900/50 rounded-lg overflow-hidden border border-gray-100 dark:border-gray-700/50';
                     const img = document.createElement('img');
@@ -799,7 +987,7 @@
 
                     const content = document.createElement('div');
                     content.className = 'outline-none text-sm font-medium text-gray-500 dark:text-gray-400 text-center bg-transparent break-words px-1 pb-1';
-                    content.contentEditable = false; // Default false
+                    content.contentEditable = false; 
                     content.spellcheck = false;
                     content.innerText = nodeData.label || "Caption";
                     
@@ -807,10 +995,9 @@
                     contentContainer.appendChild(content);
 
                 } else {
-                    // Standard Text Node
                     const content = document.createElement('div');
                     content.className = 'outline-none text-lg text-gray-800 dark:text-gray-100 font-medium text-center bg-transparent break-words leading-relaxed py-1';
-                    content.contentEditable = false; // Default false
+                    content.contentEditable = false; 
                     content.spellcheck = false;
                     content.innerText = nodeData.label || "New Idea";
                     
@@ -822,7 +1009,6 @@
                 el.addEventListener('mousedown', (e) => handleNodeMouseDown(e, id));
                 nodesLayer.appendChild(el);
             }
-            // Update pos
             el.style.left = `${nodeData.x}px`;
             el.style.top = `${nodeData.y}px`;
             
@@ -831,25 +1017,21 @@
             else if (selectedNodeIds.has(id)) el.classList.add('selected');
         }
 
-        // Helper for content events
         function setupContentEvents(element, id) {
-            // Double click to edit
             element.addEventListener('dblclick', (e) => {
                 e.stopPropagation();
                 element.contentEditable = true;
                 element.focus();
                 element.classList.remove('cursor-grab');
-                element.classList.add('cursor-text', 'select-text'); // Allow selection
+                element.classList.add('cursor-text', 'select-text'); 
             });
 
-            // Blur to save and lock
             element.addEventListener('blur', () => {
                 element.contentEditable = false;
                 element.classList.remove('cursor-text', 'select-text');
                 saveNodeContent(id, element.innerText);
             });
 
-            // Prevent enter key from creating new lines
             element.addEventListener('keydown', (e) => { 
                 if (e.key === 'Enter' && !e.shiftKey) { 
                     e.preventDefault(); 
@@ -868,7 +1050,6 @@
                 edgesLayer.appendChild(el);
             }
             const from = nodes[edgeData.from], to = nodes[edgeData.to];
-            // Adjust centers for image nodes if needed, simplistic approx for now
             const fromX = from.x + 75, fromY = from.y + 30; 
             const toX = to.x + 75, toY = to.y + 30;
             const deltaX = Math.abs(toX - fromX);
@@ -883,20 +1064,27 @@
             if(nodes[id].label !== text) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'synapse_nodes', id), { label: text });
         }
 
-        // --- Interaction Logic (Selection, Drag, Connect) ---
-        
+        // --- Interaction Logic (Create, Select, Drag Nodes) ---
         canvasContainer.addEventListener('dblclick', async (e) => {
-            if (e.target !== canvasContainer && e.target !== edgesLayer) return;
+            if (e.target !== canvasContainer && e.target !== edgesLayer && e.target.closest('div') !== viewport && e.target !== viewport) return;
+            
             const rect = canvasContainer.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            
+            const worldX = (mouseX - pan.x) / scale;
+            const worldY = (mouseY - pan.y) / scale;
+
             await setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'synapse_nodes')), {
-                x: e.clientX - rect.left - 75, y: e.clientY - rect.top - 25,
+                x: worldX - 75, 
+                y: worldY - 25,
                 label: "New Idea", projectId: currentProjectId, createdAt: serverTimestamp(), createdBy: currentUser.uid, type: 'text'
             });
         });
 
         function handleNodeMouseDown(e, id) {
             if (e.target.isContentEditable) return;
-            e.stopPropagation();
+            e.stopPropagation(); 
 
             if (isConnecting) {
                 if (!connectionSourceId) {
@@ -911,10 +1099,14 @@
             if (e.shiftKey) selectedNodeIds.has(id) ? selectedNodeIds.delete(id) : selectedNodeIds.add(id);
             else if (!selectedNodeIds.has(id)) { selectedNodeIds.clear(); selectedNodeIds.add(id); }
             
-            updateToolbar(); Object.keys(nodes).forEach(renderNode);
-            isDragging = true; dragNodeId = id;
-            const rect = document.getElementById(`node-${id}`).getBoundingClientRect();
-            dragOffset = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+            updateToolbar(); 
+            Object.keys(nodes).forEach(renderNode);
+            
+            isDraggingNode = true; 
+            dragNodeId = id;
+            dragStartMouse = { x: e.clientX, y: e.clientY };
+            dragStartNodePos = { x: nodes[id].x, y: nodes[id].y };
+            canvasContainer.classList.add('is-dragging-node');
         }
 
         async function createConnection(src, tgt) {
@@ -926,29 +1118,17 @@
             } else { alert("Already connected!"); }
         }
 
-        window.addEventListener('mousemove', (e) => {
-            if (isConnecting && connectionSourceId) updateTempLine(e);
-            if (!isDragging || !dragNodeId) return;
-            nodes[dragNodeId].x = e.clientX - dragOffset.x;
-            nodes[dragNodeId].y = e.clientY - dragOffset.y;
-            renderNode(dragNodeId); updateEdgesForNode(dragNodeId);
-        });
-
-        window.addEventListener('mouseup', async () => {
-            if (isDragging && dragNodeId) {
-                const node = nodes[dragNodeId];
-                isDragging = false;
-                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'synapse_nodes', dragNodeId), { x: node.x, y: node.y });
-                dragNodeId = null;
-            }
-        });
-
-        // Temp Line Logic
         function updateTempLine(e) {
             const src = nodes[connectionSourceId]; if(!src) return;
             const rect = canvasContainer.getBoundingClientRect();
-            const fromX = src.x + 75, fromY = src.y + 30;
-            const toX = e.clientX - rect.left, toY = e.clientY - rect.top;
+            const fromX = src.x + 75; 
+            const fromY = src.y + 30;
+            
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            const toX = (mouseX - pan.x) / scale;
+            const toY = (mouseY - pan.y) / scale;
+
             let el = document.getElementById('temp-connection-line');
             if (!el) {
                 el = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -960,7 +1140,6 @@
         }
         function clearTempLine() { document.getElementById('temp-connection-line')?.remove(); }
 
-        // Toolbar Logic
         function updateToolbar() {
             const btnLink = document.getElementById('btn-link');
             const dot = document.getElementById('link-active-dot');
@@ -969,11 +1148,11 @@
             if (isConnecting) {
                 btnLink.classList.add('bg-blue-100', 'text-blue-600', 'dark:bg-blue-900', 'dark:text-blue-300');
                 dot.classList.remove('hidden');
-                canvasContainer.classList.add('cursor-crosshair');
+                canvasContainer.classList.add('is-connecting');
             } else {
                 btnLink.classList.remove('bg-blue-100', 'text-blue-600', 'dark:bg-blue-900', 'dark:text-blue-300');
                 dot.classList.add('hidden');
-                canvasContainer.classList.remove('cursor-crosshair');
+                canvasContainer.classList.remove('is-connecting');
             }
             
             if (selectedNodeIds.size > 0) {
@@ -985,7 +1164,6 @@
             }
         }
 
-        // --- Event Listeners ---
         document.getElementById('btn-link').addEventListener('click', () => {
             if (isConnecting) exitConnectionMode();
             else {
@@ -1007,7 +1185,6 @@
             selectedNodeIds.clear(); updateToolbar();
         });
 
-        // Image Handling
         document.getElementById('btn-image').addEventListener('click', () => {
             document.getElementById('hidden-file-input').click();
         });
@@ -1015,11 +1192,9 @@
         document.getElementById('hidden-file-input').addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (!file) return;
-
-            // Size Check (500KB Limit for Firestore safety)
             if (file.size > 500 * 1024) {
                 alert("Image too large! Please upload images smaller than 500KB.");
-                e.target.value = ''; // Reset
+                e.target.value = ''; 
                 return;
             }
 
@@ -1027,12 +1202,14 @@
             reader.onload = async (event) => {
                 const base64 = event.target.result;
                 const rect = canvasContainer.getBoundingClientRect();
-                
+                const worldX = (rect.width/2 - pan.x) / scale;
+                const worldY = (rect.height/2 - pan.y) / scale;
+
                 try {
                     await setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'synapse_nodes')), {
-                        x: rect.width / 2 - 75, 
-                        y: rect.height / 2 - 75,
-                        label: file.name, // Initial caption
+                        x: worldX - 75, 
+                        y: worldY - 75,
+                        label: file.name, 
                         src: base64,
                         type: 'image',
                         projectId: currentProjectId, 
@@ -1045,15 +1222,12 @@
                 }
             };
             reader.readAsDataURL(file);
-            e.target.value = ''; // Reset for next upload
+            e.target.value = ''; 
         });
-
 
         function exitConnectionMode() { isConnecting = false; connectionSourceId = null; clearTempLine(); updateToolbar(); Object.keys(nodes).forEach(renderNode); }
         window.addEventListener('keydown', (e) => { if(e.key === 'Escape') exitConnectionMode(); });
-        canvasContainer.addEventListener('mousedown', (e) => { if(e.target===canvasContainer || e.target===edgesLayer) { if(isConnecting){exitConnectionMode();return;} selectedNodeIds.clear(); updateToolbar(); Object.keys(nodes).forEach(renderNode); }});
-
-        // --- Presence ---
+        
         function startPresence(user) {
             const ref = doc(db, 'artifacts', appId, 'public', 'data', 'synapse_presence', user.uid);
             const update = () => setDoc(ref, { uid: user.uid, color: myColor, projectId: currentProjectId, lastSeen: serverTimestamp() }, { merge: true }).catch(console.error);
@@ -1084,8 +1258,17 @@
             }
         }
 
-        // --- Modal Toggles ---
-        document.getElementById('btn-add').addEventListener('click', () => canvasContainer.dispatchEvent(new MouseEvent('dblclick', { clientX: window.innerWidth/2, clientY: window.innerHeight/2 })));
+        document.getElementById('btn-add').addEventListener('click', () => {
+             const rect = canvasContainer.getBoundingClientRect();
+             const worldX = (rect.width/2 - pan.x) / scale;
+             const worldY = (rect.height/2 - pan.y) / scale;
+             setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'synapse_nodes')), {
+                x: worldX - 75,
+                y: worldY - 25,
+                label: "New Idea", projectId: currentProjectId, createdAt: serverTimestamp(), createdBy: currentUser.uid, type: 'text'
+            });
+        });
+
         document.getElementById('btn-projects').addEventListener('click', () => document.getElementById('project-modal').classList.remove('hidden'));
         document.getElementById('btn-close-projects').addEventListener('click', () => document.getElementById('project-modal').classList.add('hidden'));
         document.getElementById('btn-create-project').addEventListener('click', createNewProject);
@@ -1106,7 +1289,6 @@
             const btn = e.target; const txt = btn.innerText; btn.innerText = "Copied!"; setTimeout(() => btn.innerText = txt, 2000);
         });
 
-        // Initialize Icons
         if (typeof lucide !== 'undefined') lucide.createIcons();
     </script>
 </body>
